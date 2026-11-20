@@ -15,7 +15,6 @@ from syscore.dateutils import (
     CALENDAR_DAYS_IN_YEAR,
     HOURS_PER_DAY,
 )
-from syscore.pandas.pdutils import uniquets
 
 
 def closing_date_rows_in_pd_object(
@@ -69,7 +68,7 @@ def intraday_date_rows_in_pd_object(
 
 def get_intraday_pdf_at_frequency(
     pd_object: Union[pd.DataFrame, pd.Series],
-    frequency: str = "H",
+    frequency: str = "h",
     closing_time: pd.DateOffset = NOTIONAL_CLOSING_TIME_AS_PD_OFFSET,
 ) -> Union[pd.Series, pd.DataFrame]:
     """
@@ -77,7 +76,7 @@ def get_intraday_pdf_at_frequency(
     >>> d = datetime.datetime
     >>> date_index = [d(2000,1,1,15),d(2000,1,1,16),d(2000,1,1,23), d(2000,1,2,15)]
     >>> df = pd.DataFrame(dict(a=[1, 2, 3,4], b=[4,5,6,7]), index=date_index)
-    >>> get_intraday_pdf_at_frequency(df,"2H")
+    >>> get_intraday_pdf_at_frequency(df,"2h")
                            a    b
     2000-01-01 14:00:00  1.0  4.0
     2000-01-01 16:00:00  2.0  5.0
@@ -93,9 +92,12 @@ def get_intraday_pdf_at_frequency(
 
 
 def merge_data_with_different_freq(
-    list_of_data: List[Union[pd.DataFrame, pd.Series]]
+    list_of_data: List[Union[pd.DataFrame, pd.Series]],
 ) -> Union[pd.Series, pd.DataFrame]:
     """
+    Where items share a timestamp, the row from the later item in list_of_data wins,
+    so pass daily prices last to keep them over intraday bars at the closing time.
+
     >>> import datetime
     >>> d = datetime.datetime
     >>> date_index1 = [d(2000,1,1,23),d(2000,1,2,23),d(2000,1,3,23)]
@@ -110,6 +112,12 @@ def merge_data_with_different_freq(
     2000-01-02 23:00:00    5
     2000-01-03 23:00:00    6
     dtype: int64
+    >>> s3 = pd.Series([9], index=[d(2000,1,1,23)])
+    >>> merge_data_with_different_freq([s3, s1])
+    2000-01-01 23:00:00    3
+    2000-01-02 23:00:00    5
+    2000-01-03 23:00:00    6
+    dtype: int64
     """
 
     filtered = [item for item in list_of_data if len(item) > 0]
@@ -117,8 +125,10 @@ def merge_data_with_different_freq(
         return list_of_data[0]
     else:
         list_as_concat_pd = pd.concat(filtered, axis=0)
-    sorted_pd = list_as_concat_pd.sort_index()
-    unique_pd = uniquets(sorted_pd)
+    # stable sort keeps input order among equal timestamps, so the later item's row is
+    # last; take the whole row rather than the last non-null value in each column
+    sorted_pd = list_as_concat_pd.sort_index(kind="stable")
+    unique_pd = sorted_pd[~sorted_pd.index.duplicated(keep="last")]
 
     return unique_pd
 
@@ -222,7 +232,7 @@ def reindex_last_monthly_include_first_date(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
 
-    df_monthly_index = list(df.resample("1M").last().index)  ## last day in month
+    df_monthly_index = list(df.resample("1ME").last().index)  ## last day in month
     df_first_date_in_index = df.index[0]
     df_monthly_index = [df_first_date_in_index] + df_monthly_index
     df_reindex = df.reindex(df_monthly_index).ffill()
@@ -269,7 +279,7 @@ def _probably_hourly_freq(avg_time_delta_in_days: float) -> bool:
 
 
 def average_time_delta_for_time_series(
-    df_or_ts: Union[pd.DataFrame, pd.Series]
+    df_or_ts: Union[pd.DataFrame, pd.Series],
 ) -> float:
     avg_time_delta = abs(np.diff(df_or_ts.index)).mean()
     avg_time_delta_in_days = avg_time_delta / np.timedelta64(1, "D")
